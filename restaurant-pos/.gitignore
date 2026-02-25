@@ -27,6 +27,10 @@ release/
 *.swp
 *.swo
 
+localdb/
+captain_cafe.db
+*.db
+
 # OS files
 .DS_Store
 Thumbs.db

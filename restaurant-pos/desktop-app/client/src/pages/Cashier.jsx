@@ -748,7 +748,7 @@ export default function Cashier() {
 
   const handleCheckout = async () => {
     if (cart.length === 0) return;
-    const payload = buildOrderPayload(false);
+    const payload = buildOrderPayload(true);
 
     try {
       const res = await axios.post(
@@ -756,15 +756,38 @@ export default function Cashier() {
         payload,
         { headers }
       );
+
+      const queuedByServer = Boolean(res?.data?.offlineQueued || res?.status === 202);
+      const queuedByClientInterceptor = Boolean(res?.request?.offline || res?.data?.offlineQueued);
+      const treatedAsOffline = queuedByServer || queuedByClientInterceptor;
+
+      if (treatedAsOffline) {
+        const queuedOrder = res?.data?.order || {
+          ...payload,
+          createdAt: new Date().toISOString(),
+          offlineQueued: true,
+        };
+        setLastOrder(queuedOrder);
+        setShowCheckoutModal(false);
+        clearCart();
+        alert(res?.data?.message || "Internet unavailable. Order saved locally and will sync automatically.");
+        return;
+      }
+
       setLastOrder(res.data);
       setShowCheckoutModal(false);
       clearCart();
       syncOfflineOrders();
     } catch (e) {
+      const responseMessage = String(e?.response?.data?.message || "").toLowerCase();
       const isNetworkOrOffline =
         !e.response ||
         e.code === "ERR_NETWORK" ||
-        (typeof e.message === "string" && e.message.toLowerCase().includes("network"));
+        (typeof e.message === "string" && e.message.toLowerCase().includes("network")) ||
+        e?.response?.status >= 500 ||
+        responseMessage.includes("cloud") ||
+        responseMessage.includes("not connected") ||
+        responseMessage.includes("buffering timed out");
 
       if (!isNetworkOrOffline) {
         alert(e.response?.data?.message || "Checkout failed. Please try again.");
@@ -775,9 +798,14 @@ export default function Cashier() {
         const localPayload = buildOrderPayload(true);
         await axios.post(
           "http://localhost:5000/api/offline/queue-order",
-          localPayload,
+          payload,
           { headers }
         );
+        setLastOrder({
+          ...payload,
+          createdAt: new Date().toISOString(),
+          offlineQueued: true,
+        });
         setShowCheckoutModal(false);
         clearCart();
         alert("Internet unavailable. Order saved locally and will sync automatically.");

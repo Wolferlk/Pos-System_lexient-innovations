@@ -3,6 +3,8 @@ const Item = require("../models/Item");
 const Customer = require("../models/Customer");
 const Inventory = require("../models/Inventory");
 const { logAction } = require("../utils/auditLogger");
+const { isCloudConnected } = require("../config/cloudState");
+const { queueLocalOrder } = require("../services/localSync.service");
 
 // Generate Invoice Number
 const generateInvoiceNumber = () => {
@@ -14,6 +16,56 @@ const generateInvoiceNumber = () => {
 exports.createOrder = async (req, res) => {
   try {
     const { items, paymentMethod, customerPhone } = req.body;
+    const fallbackInvoice = req.body?.invoiceNumber || `OFF-${Date.now()}`;
+
+    if (!isCloudConnected()) {
+      const subTotal = Number(req.body?.subTotal || 0);
+      const totalDiscount = Number(req.body?.totalDiscount || 0);
+      const grandTotal =
+        req.body?.grandTotal ?? (subTotal - totalDiscount);
+
+      const offlinePayload = {
+        invoiceNumber: fallbackInvoice,
+        items: Array.isArray(items) ? items : [],
+        subTotal,
+        totalDiscount,
+        grandTotal,
+        paymentMethod: paymentMethod || "Cash",
+        customerPhone: customerPhone || null,
+        status: req.body?.status || "Completed",
+      };
+
+      const queued = await queueLocalOrder(offlinePayload);
+      const offlineOrder = {
+        ...offlinePayload,
+        _id: `local-${queued.id}`,
+        createdAt: new Date().toISOString(),
+        offlineQueued: true,
+      };
+
+      await logAction({
+        req,
+        action: "CREATE_ORDER",
+        task: "Create order",
+        module: "Orders",
+        description: `Cloud offline. Order ${queued.invoiceNumber} queued locally`,
+        entityType: "LocalOrder",
+        entityId: queued.id,
+        payload: {
+          invoiceNumber: queued.invoiceNumber,
+          grandTotal: offlinePayload.grandTotal,
+          paymentMethod: offlinePayload.paymentMethod,
+          itemCount: offlinePayload.items.length,
+        },
+      });
+
+      return res.status(202).json({
+        message: "Cloud unavailable. Order queued locally and will sync automatically.",
+        offlineQueued: true,
+        queued,
+        order: offlineOrder,
+      });
+    }
 
     let subTotal = 0;
     let totalDiscount = 0;
