@@ -1,5 +1,6 @@
-import React, { useState } from "react";
+import React from "react";
 import { useNavigate, useLocation } from "react-router-dom";
+import axios from "axios";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -224,6 +225,9 @@ const NAV = {
     { label: "Employees",     icon: "👥", path: "/admin/employees" },
     { label: "Customers",     icon: "👥", path: "/admin/customers" },
     { label: "Expenses",       icon: "📊", path: "/admin/expenses" },
+    { label: "Audit Logs",    icon: "🛡️", path: "/admin/audit-logs" },
+    { label: "User Manage", icon: "⚡", path: "/admin/users" },
+    { label: "Register User", icon: "📝", path: "/admin/register-user" },
     { label: "Cashier Panel", icon: "⚡", path: "/cashier" },
   ],
   cashier: [
@@ -236,9 +240,22 @@ export default function Sidebar() {
   const location = useLocation();
   const role = localStorage.getItem("role") || "cashier";
 
-  const logout = () => {
-    localStorage.clear();
-    navigate("/login");
+  const logout = async () => {
+    const token = localStorage.getItem("token");
+    try {
+      if (token) {
+        await axios.post(
+          "http://localhost:5000/api/auth/logout",
+          {},
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+      }
+    } catch (_error) {
+      // Logging failure should not block user logout from UI.
+    } finally {
+      localStorage.clear();
+      navigate("/login");
+    }
   };
 
   const navItems = NAV[role] || NAV.cashier;

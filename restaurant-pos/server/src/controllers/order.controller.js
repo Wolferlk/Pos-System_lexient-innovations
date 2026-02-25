@@ -2,6 +2,7 @@ const Order = require("../models/Order");
 const Item = require("../models/Item");
 const Customer = require("../models/Customer");
 const Inventory = require("../models/Inventory");
+const { logAction } = require("../utils/auditLogger");
 
 // Generate Invoice Number
 const generateInvoiceNumber = () => {
@@ -86,8 +87,33 @@ exports.createOrder = async (req, res) => {
       }
     }
 
+    await logAction({
+      req,
+      action: "CREATE_ORDER",
+      task: "Create order",
+      module: "Orders",
+      description: `Invoice ${order.invoiceNumber} created`,
+      entityType: "Order",
+      entityId: order._id,
+      payload: {
+        invoiceNumber: order.invoiceNumber,
+        itemCount: order.items?.length || 0,
+        grandTotal: order.grandTotal,
+        paymentMethod: order.paymentMethod,
+      },
+    });
+
     res.status(201).json(order);
   } catch (error) {
+    await logAction({
+      req,
+      action: "CREATE_ORDER",
+      task: "Create order",
+      module: "Orders",
+      status: "FAILED",
+      description: "Create order failed",
+      payload: { message: error.message },
+    });
     res.status(500).json({ message: error.message });
   }
 };
@@ -98,6 +124,37 @@ exports.getOrders = async (req, res) => {
     const orders = await Order.find().sort({ createdAt: -1 });
     res.json(orders);
   } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+exports.deleteOrder = async (req, res) => {
+  try {
+    const order = await Order.findByIdAndDelete(req.params.id);
+    if (!order) return res.status(404).json({ message: "Order not found" });
+
+    await logAction({
+      req,
+      action: "DELETE_ORDER",
+      task: "Delete order",
+      module: "Orders",
+      description: `Order ${order.invoiceNumber || order._id} deleted`,
+      entityType: "Order",
+      entityId: order._id,
+      payload: { invoiceNumber: order.invoiceNumber, grandTotal: order.grandTotal },
+    });
+
+    res.json({ message: "Order deleted successfully" });
+  } catch (error) {
+    await logAction({
+      req,
+      action: "DELETE_ORDER",
+      task: "Delete order",
+      module: "Orders",
+      status: "FAILED",
+      description: "Delete order failed",
+      payload: { message: error.message, orderId: req.params.id },
+    });
     res.status(500).json({ message: error.message });
   }
 };

@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from "react";
 import axios from "axios";
 import MainLayout from "../layout/MainLayout";
+import { generateDetailedReportPdf } from "../utils/reportPdf";
 import {
   AreaChart, Area, BarChart, Bar, PieChart, Pie, Cell,
   XAxis, YAxis, Tooltip, CartesianGrid, ResponsiveContainer, Legend,
@@ -79,6 +80,10 @@ const CSS = `
 
   /* Controls */
   .rpt-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .rpt-date-input {
+    background: var(--card); border: 1px solid var(--border); color: var(--txt2);
+    font-family: var(--mono); font-size: 11px; padding: 8px 10px; border-radius: var(--r-sm);
+  }
   .rpt-range-tabs {
     display: flex; background: var(--card); border: 1px solid var(--border);
     border-radius: var(--r-sm); padding: 3px; gap: 2px;
@@ -331,6 +336,8 @@ export default function Reports() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [range, setRange] = useState("7d"); // 7d | 30d | 90d
+  const [fromDate, setFromDate] = useState("");
+  const [toDate, setToDate] = useState("");
 
   const token = localStorage.getItem("token");
   const headers = { Authorization: `Bearer ${token}` };
@@ -350,14 +357,18 @@ export default function Reports() {
 
       if (chartRes.status === "fulfilled") {
         const raw = chartRes.value.data || [];
-        // Filter by range
         const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
         const cutoff = new Date();
         cutoff.setDate(cutoff.getDate() - days);
+        const from = fromDate ? new Date(fromDate) : null;
+        const to = toDate ? new Date(toDate) : null;
         const filtered = raw
           .filter(item => {
             const d = new Date(item._id.year || new Date().getFullYear(), (item._id.month||1)-1, item._id.day||1);
-            return d >= cutoff;
+            if (from && d < from) return false;
+            if (to && d > to) return false;
+            if (!from && d < cutoff) return false;
+            return true;
           })
           .map(item => ({
             date: `${item._id.day}/${item._id.month}`,
@@ -374,21 +385,36 @@ export default function Reports() {
       console.error(e);
     }
     setLoading(false); setRefreshing(false);
-  }, [range]);
+  }, [range, fromDate, toDate]);
 
   useEffect(() => { fetchAll(); }, [range]);
 
   // ── Derived stats ────────────────────────────────────────────────────────
-  const todayOrders = orders.filter(o => {
+  const periodOrders = orders.filter((o) => {
+    const d = new Date(o.createdAt);
+    const from = fromDate ? new Date(fromDate) : null;
+    const to = toDate ? new Date(toDate) : null;
+    if (from && d < from) return false;
+    if (to && d > to) return false;
+    if (!from) {
+      const days = range === "7d" ? 7 : range === "30d" ? 30 : 90;
+      const cutoff = new Date();
+      cutoff.setDate(cutoff.getDate() - days);
+      if (d < cutoff) return false;
+    }
+    return true;
+  });
+
+  const todayOrders = periodOrders.filter(o => {
     const d = new Date(o.createdAt);
     const now = new Date();
     return d.toDateString() === now.toDateString();
   });
 
-  const totalOrders = orders.length;
+  const totalOrders = periodOrders.length;
 
   // Payment method breakdown
-  const payBreakdown = orders.reduce((acc, o) => {
+  const payBreakdown = periodOrders.reduce((acc, o) => {
     const m = o.paymentMethod || "Other";
     if (!acc[m]) acc[m] = { count: 0, total: 0 };
     acc[m].count++;
@@ -403,7 +429,7 @@ export default function Reports() {
   const pieData = payData.map(p => ({ name: p.name, value: p.total }));
 
   // Top items
-  const itemCounts = orders.reduce((acc, o) => {
+  const itemCounts = periodOrders.reduce((acc, o) => {
     (o.items || []).forEach(i => {
       const key = i.name || "Unknown";
       if (!acc[key]) acc[key] = 0;
@@ -419,21 +445,52 @@ export default function Reports() {
 
   // Hourly heatmap (0-23)
   const hourlyMap = Array(24).fill(0);
-  orders.forEach(o => {
+  periodOrders.forEach(o => {
     const h = new Date(o.createdAt).getHours();
     hourlyMap[h]++;
   });
   const maxHour = Math.max(...hourlyMap, 1);
 
   // Recent orders (last 10)
-  const recentOrders = [...orders]
+  const recentOrders = [...periodOrders]
     .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
     .slice(0, 10);
 
   // Avg order value
   const avgOrder = totalOrders > 0
-    ? Math.round(orders.reduce((s, o) => s + Number(o.grandTotal || 0), 0) / totalOrders)
+    ? Math.round(periodOrders.reduce((s, o) => s + Number(o.grandTotal || 0), 0) / totalOrders)
     : 0;
+
+  const exportPdf = () => {
+    generateDetailedReportPdf({
+      title: "Sales Analytics Detailed Report",
+      subtitle: "Comprehensive report for selected period",
+      filters: [
+        { label: "Preset Range", value: range },
+        { label: "From", value: fromDate || "Auto by preset" },
+        { label: "To", value: toDate || "Now" },
+      ],
+      summary: [
+        { label: "Orders", value: totalOrders },
+        { label: "Total Sales", value: `Rs. ${fmt(periodOrders.reduce((s, o) => s + Number(o.grandTotal || 0), 0))}` },
+        { label: "Average Order", value: `Rs. ${fmt(avgOrder)}` },
+        { label: "Unpaid Orders", value: periodOrders.filter((o) => o.paymentMethod === "Unpaid").length },
+      ],
+      columns: ["Invoice", "Date/Time", "Customer", "Items Detail", "Payment", "Total (Rs.)"],
+      rows: periodOrders
+        .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+        .map((o) => [
+          o.invoiceNumber || "-",
+          new Date(o.createdAt).toLocaleString(),
+          o.customerPhone || "Walk-in",
+          (o.items || [])
+            .map((i) => `${i.name}${i.portion ? ` (${i.portion})` : ""} x${i.quantity}`)
+            .join(", "),
+          o.paymentMethod || "Cash",
+          fmt(o.grandTotal || 0),
+        ]),
+    });
+  };
 
   if (loading) return (
     <MainLayout>
@@ -471,6 +528,29 @@ export default function Reports() {
                 </button>
               ))}
             </div>
+            <input
+              className="rpt-date-input"
+              type="datetime-local"
+              value={fromDate}
+              onChange={(e) => setFromDate(e.target.value)}
+            />
+            <input
+              className="rpt-date-input"
+              type="datetime-local"
+              value={toDate}
+              onChange={(e) => setToDate(e.target.value)}
+            />
+            <button className="rpt-refresh-btn" onClick={exportPdf}>Generate PDF</button>
+            <button
+              className="rpt-refresh-btn"
+              onClick={() => {
+                setFromDate("");
+                setToDate("");
+                setRange("7d");
+              }}
+            >
+              Clear Period
+            </button>
             <button className={`rpt-refresh-btn${refreshing?" spinning":""}`} onClick={()=>fetchAll(true)}>
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5">
                 <path d="M23 4v6h-6"/><path d="M1 20v-6h6"/>

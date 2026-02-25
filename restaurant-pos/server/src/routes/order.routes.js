@@ -9,5 +9,6 @@ router.post("/", verifyToken, authorizeRoles("admin", "cashier"), orderControlle
 
 // Admin only can view all orders
 router.get("/", verifyToken, authorizeRoles("admin"), orderController.getOrders);
+router.delete("/:id", verifyToken, authorizeRoles("admin"), orderController.deleteOrder);
 
 module.exports = router;

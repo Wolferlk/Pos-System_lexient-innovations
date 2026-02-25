@@ -646,6 +646,7 @@ export default function Cashier() {
   const dragIdx = useRef(null);
 
   const token = localStorage.getItem("token");
+  const headers = { Authorization:`Bearer ${token}` };
 
   useEffect(() => { fetchItems(); }, []);
   useEffect(() => { filterItems(); }, [category, search, items]);
@@ -701,28 +702,95 @@ export default function Cashier() {
   const discountAmt = customer ? Math.round((subtotal * customer.discountPercentage) / 100) : 0;
   const getTotal = () => subtotal - discountAmt;
 
+  const buildOrderPayload = (includeFinancials = false) => {
+    const payload = {
+      items: cart.map(i => ({
+        itemId: i.itemId,
+        name: i.name,
+        quantity: i.quantity,
+        price: i.price,
+        portion: i.portion,
+        discount: 0,
+        total: i.price * i.quantity,
+      })),
+      paymentMethod,
+      customerPhone: phone || null,
+    };
+
+    if (includeFinancials) {
+      payload.invoiceNumber = `OFF-${Date.now()}`;
+      payload.subTotal = subtotal;
+      payload.totalDiscount = discountAmt;
+      payload.grandTotal = getTotal();
+      payload.status = paymentMethod === "Unpaid" ? "Pending" : "Completed";
+    }
+
+    return payload;
+  };
+
+  const syncOfflineOrders = async () => {
+    try {
+      await axios.post(
+        "http://localhost:5000/api/offline/sync",
+        {},
+        { headers }
+      );
+    } catch {
+      // Silent: sync will retry next online event or next successful checkout.
+    }
+  };
+
+  useEffect(() => {
+    const onOnline = () => { syncOfflineOrders(); };
+    window.addEventListener("online", onOnline);
+    return () => window.removeEventListener("online", onOnline);
+  }, []);
+
   const handleCheckout = async () => {
     if (cart.length === 0) return;
+    const payload = buildOrderPayload(false);
+
     try {
       const res = await axios.post(
         "http://localhost:5000/api/orders",
-        {
-          items: cart.map(i => ({ itemId:i.itemId, quantity:i.quantity, price:i.price, portion:i.portion, discount:0 })),
-          paymentMethod,
-          customerPhone: phone || null,
-        },
-        { headers: { Authorization:`Bearer ${token}` } }
+        payload,
+        { headers }
       );
       setLastOrder(res.data);
       setShowCheckoutModal(false);
       clearCart();
-    } catch { alert("Checkout failed. Please try again."); }
+      syncOfflineOrders();
+    } catch (e) {
+      const isNetworkOrOffline =
+        !e.response ||
+        e.code === "ERR_NETWORK" ||
+        (typeof e.message === "string" && e.message.toLowerCase().includes("network"));
+
+      if (!isNetworkOrOffline) {
+        alert(e.response?.data?.message || "Checkout failed. Please try again.");
+        return;
+      }
+
+      try {
+        const localPayload = buildOrderPayload(true);
+        await axios.post(
+          "http://localhost:5000/api/offline/queue-order",
+          localPayload,
+          { headers }
+        );
+        setShowCheckoutModal(false);
+        clearCart();
+        alert("Internet unavailable. Order saved locally and will sync automatically.");
+      } catch {
+        alert("Checkout failed and local save also failed. Please try again.");
+      }
+    }
   };
 
   const checkCustomer = async () => {
     if (!phone) return;
     try {
-      const res = await axios.get(`http://localhost:5000/api/customers/${phone}`, { headers:{Authorization:`Bearer ${token}`} });
+      const res = await axios.get(`http://localhost:5000/api/customers/${phone}`, { headers });
       setCustomer(res.data);
     } catch {
       // Not found → offer registration
@@ -746,7 +814,7 @@ export default function Cashier() {
   const handleDragEnd = () => { dragIdx.current = null; };
 
   // ── Font scale ─────────────────────────────────────────────────────────────
-  const adjustFont = (delta) => setFontScale(prev => Math.min(18, Math.max(11, prev + delta)));
+  const adjustFont = (delta) => setFontScale(prev => Math.min(25, Math.max(11, prev + delta)));
 
   return (
     <MainLayout>

@@ -10,6 +10,8 @@ import ManageItems from "./pages/ManageItems";
 import Employees from "./pages/Employees";
 import Expenses from "./pages/Expenses";
 import Customers from "./pages/Customers";
+import User from "./pages/Users";
+import AuditLogs from "./pages/AuditLogs";
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem("token");
@@ -32,6 +34,15 @@ export default function App() {
   element={
     <PrivateRoute>
       <ManageItems />
+    </PrivateRoute>
+  }
+/>
+
+<Route
+  path="/admin/users"
+  element={
+    <PrivateRoute>
+      <User />
     </PrivateRoute>
   }
 />
@@ -86,6 +97,24 @@ export default function App() {
   element={
     <PrivateRoute>
       <Expenses />
+    </PrivateRoute>
+  }
+/>
+
+<Route
+  path="/admin/audit-logs"
+  element={
+    <PrivateRoute>
+      <AuditLogs />
+    </PrivateRoute>
+  }
+/>
+
+<Route
+  path="/admin/register-user"
+  element={
+    <PrivateRoute>
+      <Register />
     </PrivateRoute>
   }
 />

@@ -16,6 +16,9 @@ app.use("/api/inventory", require("./routes/inventory.routes"));
 app.use("/api/customers", require("./routes/customer.routes"));
 app.use("/api/employees", require("./routes/employee.routes"));
 app.use("/api/expenses", require("./routes/expense.routes"));
+app.use("/api/users", require("./routes/user.routes"));
+app.use("/api/logs", require("./routes/log.routes"));
+app.use("/api/offline", require("./routes/offline.routes"));
 
 // 🔐 Protected test route
 app.get("/api/admin-only", verifyToken, authorizeRoles("admin"), (req, res) => {
