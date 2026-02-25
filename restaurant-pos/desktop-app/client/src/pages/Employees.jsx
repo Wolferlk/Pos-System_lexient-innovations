@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import axios from "axios";
 import MainLayout from "../layout/MainLayout";
+import { generateDetailedReportPdf } from "../utils/reportPdf";
 
 const styles = `
   @import url('https://fonts.googleapis.com/css2?family=Sora:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
@@ -139,6 +140,20 @@ const styles = `
   @keyframes toast-in { from{opacity:0;transform:translateY(16px) scale(0.95)}to{opacity:1;transform:translateY(0) scale(1)} }
   .emp-toast.success { border-color: rgba(34,197,94,0.3); }
   .emp-toast.error   { border-color: rgba(239,68,68,0.3); }
+
+  .emp-analytics-card { background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--radius); padding: 18px 20px; margin-bottom: 24px; }
+  .emp-analytics-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
+  .emp-analytics-title { font-size: 14px; font-weight: 700; }
+  .emp-analytics-actions { display: flex; gap: 8px; }
+  .emp-mini-btn { background: var(--bg-elevated); border: 1px solid var(--border); color: var(--text-muted); border-radius: var(--radius-sm); padding: 8px 10px; font-size: 12px; cursor: pointer; font-family: var(--font); font-weight: 600; }
+  .emp-mini-btn:hover { border-color: rgba(245,166,35,0.25); color: var(--accent); }
+  .emp-an-grid { display:grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-bottom: 12px; }
+  .emp-an-box { background: var(--bg-elevated); border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 10px; }
+  .emp-an-k { font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-family: var(--mono); }
+  .emp-an-v { margin-top: 6px; font-size: 18px; font-weight: 700; font-family: var(--mono); }
+  .emp-an-table { width: 100%; border-collapse: collapse; }
+  .emp-an-table th { padding: 9px 10px; text-align: left; font-size: 10px; color: var(--text-muted); text-transform: uppercase; letter-spacing: 1px; font-family: var(--mono); border-bottom: 1px solid var(--border); }
+  .emp-an-table td { padding: 9px 10px; border-bottom: 1px solid var(--border); font-size: 12px; }
 `;
 
 const ROLES = ["Chef", "Cashier", "Manager", "Waiter"];
@@ -149,17 +164,31 @@ function Toast({ msg, type, onClose }) {
   return <div className={`emp-toast ${type}`}><span>{type === "success" ? "✅" : "❌"}</span>{msg}</div>;
 }
 
-function EditModal({ emp, onClose, onSaved, token, showToast }) {
+function EditModal({ emp, month, workingDays, onClose, onSaved, token, showToast }) {
   const [form, setForm] = useState({
     name: emp.name,
     role: emp.role,
     basicSalary: emp.basicSalary,
-    attendanceDays: emp.attendanceDays ?? 0,
+    attendanceDays: emp.monthData?.attendanceDays ?? emp.attendanceDays ?? 0,
+    overtimeHours: emp.monthData?.overtimeHours ?? 0,
+    allowance: emp.monthData?.allowance ?? 0,
+    deduction: emp.monthData?.deduction ?? 0,
+    note: emp.monthData?.note ?? "",
   });
   const [saving, setSaving] = useState(false);
   const set = (key, val) => setForm((f) => ({ ...f, [key]: val }));
 
-  const netSalary = Math.round((Number(form.basicSalary) / 30) * Number(form.attendanceDays));
+  const dailyRate = Number(form.basicSalary) / Number(workingDays || 30);
+  const hourlyRate = dailyRate / 8;
+  const netSalary = Math.max(
+    0,
+    Math.round(
+      dailyRate * Number(form.attendanceDays) +
+      hourlyRate * Number(form.overtimeHours) +
+      Number(form.allowance) -
+      Number(form.deduction)
+    )
+  );
 
   const handleSave = async () => {
     if (!form.name.trim()) return showToast("Name is required", "error");
@@ -173,7 +202,14 @@ function EditModal({ emp, onClose, onSaved, token, showToast }) {
       );
       await axios.put(
         `http://localhost:5000/api/employees/${emp._id}/attendance`,
-        { attendanceDays: Number(form.attendanceDays) },
+        {
+          month,
+          attendanceDays: Number(form.attendanceDays),
+          overtimeHours: Number(form.overtimeHours),
+          allowance: Number(form.allowance),
+          deduction: Number(form.deduction),
+          note: form.note,
+        },
         { headers: { Authorization: `Bearer ${token}` } }
       );
       showToast(`${form.name} updated successfully`);
@@ -220,20 +256,36 @@ function EditModal({ emp, onClose, onSaved, token, showToast }) {
         <div className="emp-modal-section">Attendance & Payroll</div>
         <div className="emp-modal-grid">
           <div className="emp-field">
-            <label className="emp-label">Attendance Days (0–30)</label>
+            <label className="emp-label">Attendance Days (0–31)</label>
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-              <button className="emp-att-btn" onClick={() => set("attendanceDays", Math.max(0, Number(form.attendanceDays) - 1))}>−</button>
+              <button type="button" className="emp-att-btn" onClick={() => set("attendanceDays", Math.max(0, Number(form.attendanceDays) - 1))}>−</button>
               <input
-                className="emp-input" type="number" min={0} max={30}
+                className="emp-input" type="number" min={0} max={31}
                 value={form.attendanceDays}
-                onChange={(e) => set("attendanceDays", Math.min(30, Math.max(0, Number(e.target.value))))}
+                onChange={(e) => set("attendanceDays", Math.min(31, Math.max(0, Number(e.target.value))))}
                 style={{ textAlign: "center", fontFamily: "var(--mono)", fontWeight: 700 }}
               />
-              <button className="emp-att-btn" onClick={() => set("attendanceDays", Math.min(30, Number(form.attendanceDays) + 1))}>+</button>
+              <button type="button" className="emp-att-btn" onClick={() => set("attendanceDays", Math.min(31, Number(form.attendanceDays) + 1))}>+</button>
             </div>
           </div>
           <div className="emp-field">
-            <label className="emp-label">Net Salary (Auto-calculated)</label>
+            <label className="emp-label">Overtime Hours</label>
+            <input className="emp-input" type="number" min={0} value={form.overtimeHours} onChange={(e) => set("overtimeHours", Math.max(0, Number(e.target.value)))} />
+          </div>
+          <div className="emp-field">
+            <label className="emp-label">Allowance (Rs.)</label>
+            <input className="emp-input" type="number" min={0} value={form.allowance} onChange={(e) => set("allowance", Math.max(0, Number(e.target.value)))} />
+          </div>
+          <div className="emp-field">
+            <label className="emp-label">Deduction (Rs.)</label>
+            <input className="emp-input" type="number" min={0} value={form.deduction} onChange={(e) => set("deduction", Math.max(0, Number(e.target.value)))} />
+          </div>
+          <div className="emp-field full">
+            <label className="emp-label">Note</label>
+            <input className="emp-input" value={form.note} placeholder="Optional note for this month" onChange={(e) => set("note", e.target.value)} />
+          </div>
+          <div className="emp-field">
+            <label className="emp-label">Net Salary ({month})</label>
             <div className="emp-net-display">Rs. {netSalary.toLocaleString()}</div>
           </div>
         </div>
@@ -252,15 +304,20 @@ function EditModal({ emp, onClose, onSaved, token, showToast }) {
 export default function Employees() {
   const [employees, setEmployees] = useState([]);
   const [filtered, setFiltered] = useState([]);
+  const [attendanceSummary, setAttendanceSummary] = useState({ totals: null, rows: [] });
   const [search, setSearch] = useState("");
   const [form, setForm] = useState({ name: "", role: "Cashier", basicSalary: "" });
   const [editTarget, setEditTarget] = useState(null);
   const [toast, setToast] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [selectedMonth, setSelectedMonth] = useState(() => new Date().toISOString().slice(0, 7));
+  const [workingDays, setWorkingDays] = useState(30);
+  const [editDay, setEditDay] = useState(() => new Date().toISOString().slice(0, 10));
+  const [editingDayEmp, setEditingDayEmp] = useState("");
 
   const token = localStorage.getItem("token");
 
-  useEffect(() => { fetchEmployees(); }, []);
+  useEffect(() => { fetchEmployees(); fetchAttendanceSummary(); }, [selectedMonth, workingDays]);
   useEffect(() => {
     if (!search.trim()) { setFiltered(employees); return; }
     const q = search.toLowerCase();
@@ -269,12 +326,78 @@ export default function Employees() {
 
   const fetchEmployees = async () => {
     try {
-      const res = await axios.get("http://localhost:5000/api/employees", { headers: { Authorization: `Bearer ${token}` } });
+      const res = await axios.get("http://localhost:5000/api/employees", {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { month: selectedMonth, workingDays },
+      });
       setEmployees(res.data);
     } catch { showToast("Failed to load employees", "error"); }
   };
 
+  const fetchAttendanceSummary = async () => {
+    try {
+      const res = await axios.get("http://localhost:5000/api/employees/attendance/summary", {
+        headers: { Authorization: `Bearer ${token}` },
+        params: { month: selectedMonth, workingDays },
+      });
+      setAttendanceSummary({
+        totals: res.data?.totals || null,
+        rows: res.data?.rows || [],
+      });
+    } catch {
+      setAttendanceSummary({ totals: null, rows: [] });
+    }
+  };
+
   const showToast = (msg, type = "success") => setToast({ msg, type });
+
+  const exportAttendancePdf = () => {
+    const rows = attendanceSummary.rows || [];
+    const totals = attendanceSummary.totals || {};
+    generateDetailedReportPdf({
+      title: "Employee Attendance & Salary Report",
+      subtitle: "Monthly attendance analysis with payroll output",
+      filters: [
+        { label: "Month", value: selectedMonth },
+        { label: "Working Days", value: workingDays },
+      ],
+      summary: [
+        { label: "Employees", value: totals.totalEmployees || 0 },
+        { label: "Avg Attendance %", value: `${totals.avgAttendanceRate || 0}%` },
+        { label: "Present Days", value: totals.presentCount || 0 },
+        { label: "Absent Days", value: totals.absentCount || 0 },
+        { label: "Total Net Salary", value: `Rs. ${(totals.netSalary || 0).toLocaleString()}` },
+      ],
+      columns: ["Employee", "Role", "Attendance Days", "Present", "Half", "Absent", "Attendance %", "OT Hours", "Net Salary"],
+      rows: rows.map((r) => [
+        r.name,
+        r.role,
+        r.attendanceDays,
+        r.presentCount,
+        r.halfCount,
+        r.absentCount,
+        `${r.attendanceRate}%`,
+        r.overtimeHours,
+        `Rs. ${Number(r.payroll?.net || 0).toLocaleString()}`,
+      ]),
+    });
+  };
+
+  const updateDayStatus = async (empId, status) => {
+    setEditingDayEmp(empId);
+    try {
+      await axios.put(
+        `http://localhost:5000/api/employees/${empId}/attendance/day`,
+        { date: editDay, status },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+      await Promise.all([fetchEmployees(), fetchAttendanceSummary()]);
+      showToast(`Attendance updated for ${editDay}`);
+    } catch {
+      showToast("Failed to edit daily attendance", "error");
+    }
+    setEditingDayEmp("");
+  };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
@@ -293,19 +416,21 @@ export default function Employees() {
   };
 
   const updateAttendance = async (emp, delta) => {
-    const newDays = Math.max(0, Math.min(30, (emp.attendanceDays || 0) + delta));
+    const baseDays = emp.monthData?.attendanceDays ?? emp.attendanceDays ?? 0;
+    const newDays = Math.max(0, Math.min(31, baseDays + delta));
     try {
       await axios.put(
         `http://localhost:5000/api/employees/${emp._id}/attendance`,
-        { attendanceDays: newDays },
+        { month: selectedMonth, attendanceDays: newDays },
         { headers: { Authorization: `Bearer ${token}` } }
       );
-      setEmployees((prev) => prev.map((e) => e._id === emp._id ? { ...e, attendanceDays: newDays } : e));
+      fetchEmployees();
     } catch { showToast("Failed to update attendance", "error"); }
   };
 
-  const calcNet = (emp) => Math.round((emp.basicSalary / 30) * (emp.attendanceDays || 0));
+  const calcNet = (emp) => Number(emp.payroll?.net || 0);
   const totalPayroll = employees.reduce((s, e) => s + calcNet(e), 0);
+  const totals = attendanceSummary.totals || {};
 
   return (
     <MainLayout>
@@ -316,7 +441,11 @@ export default function Employees() {
         <div className="emp-page-header">
           <div>
             <div className="emp-page-title">👨‍💼 Employee Management</div>
-            <div className="emp-page-sub">Manage staff, roles & attendance</div>
+            <div className="emp-page-sub">Manage staff, attendance and monthly payroll</div>
+            <div style={{ display: "flex", gap: 8, marginTop: 10 }}>
+              <input className="emp-input" type="month" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)} style={{ maxWidth: 180 }} />
+              <input className="emp-input" type="number" min={1} max={31} value={workingDays} onChange={(e) => setWorkingDays(Math.min(31, Math.max(1, Number(e.target.value))))} style={{ maxWidth: 140 }} placeholder="Working days" />
+            </div>
           </div>
           <div className="emp-stats">
             <div className="emp-stat-card">
@@ -325,9 +454,62 @@ export default function Employees() {
             </div>
             <div className="emp-stat-card">
               <div className="emp-stat-val" style={{ color: "var(--success)" }}>Rs. {totalPayroll.toLocaleString()}</div>
-              <div className="emp-stat-label">Est. Payroll</div>
+              <div className="emp-stat-label">{selectedMonth} Payroll</div>
             </div>
           </div>
+        </div>
+
+        <div className="emp-analytics-card">
+          <div className="emp-analytics-head">
+            <div className="emp-analytics-title">📈 Attendance Analysis ({selectedMonth})</div>
+            <div className="emp-analytics-actions">
+              <input className="emp-mini-btn" type="date" value={editDay} onChange={(e) => setEditDay(e.target.value)} />
+              <button className="emp-mini-btn" onClick={fetchAttendanceSummary}>Refresh Analysis</button>
+              <button className="emp-mini-btn" onClick={exportAttendancePdf}>Generate PDF</button>
+            </div>
+          </div>
+          <div className="emp-an-grid">
+            <div className="emp-an-box"><div className="emp-an-k">Employees</div><div className="emp-an-v">{totals.totalEmployees || 0}</div></div>
+            <div className="emp-an-box"><div className="emp-an-k">Attendance Days</div><div className="emp-an-v">{totals.attendanceDays || 0}</div></div>
+            <div className="emp-an-box"><div className="emp-an-k">Average %</div><div className="emp-an-v">{totals.avgAttendanceRate || 0}%</div></div>
+            <div className="emp-an-box"><div className="emp-an-k">Absent Entries</div><div className="emp-an-v">{totals.absentCount || 0}</div></div>
+            <div className="emp-an-box"><div className="emp-an-k">Net Salary</div><div className="emp-an-v">Rs. {(totals.netSalary || 0).toLocaleString()}</div></div>
+          </div>
+          <table className="emp-an-table">
+            <thead>
+              <tr>
+                <th>Employee</th>
+                <th>Role</th>
+                <th>Attendance</th>
+                <th>Absent</th>
+                <th>OT</th>
+                <th>Net Salary</th>
+                <th>Edit Day</th>
+              </tr>
+            </thead>
+            <tbody>
+              {(attendanceSummary.rows || []).slice(0, 8).map((r) => (
+                <tr key={r.employeeId}>
+                  <td>{r.name}</td>
+                  <td>{r.role}</td>
+                  <td>{r.attendanceDays} ({r.attendanceRate}%)</td>
+                  <td>{r.absentCount}</td>
+                  <td>{r.overtimeHours}h</td>
+                  <td>Rs. {Number(r.payroll?.net || 0).toLocaleString()}</td>
+                  <td>
+                    <div style={{ display: "flex", gap: 6 }}>
+                      <button className="emp-mini-btn" disabled={editingDayEmp === r.employeeId} onClick={() => updateDayStatus(r.employeeId, "Present")}>P</button>
+                      <button className="emp-mini-btn" disabled={editingDayEmp === r.employeeId} onClick={() => updateDayStatus(r.employeeId, "Half")}>H</button>
+                      <button className="emp-mini-btn" disabled={editingDayEmp === r.employeeId} onClick={() => updateDayStatus(r.employeeId, "Absent")}>A</button>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+              {(attendanceSummary.rows || []).length === 0 && (
+                <tr><td colSpan={7}>No attendance analysis data</td></tr>
+              )}
+            </tbody>
+          </table>
         </div>
 
         {/* Add Form */}
@@ -369,13 +551,14 @@ export default function Employees() {
                 <th>Role</th>
                 <th>Basic Salary</th>
                 <th>Attendance</th>
+                <th>OT / Adj.</th>
                 <th>Net Salary</th>
                 <th>Edit</th>
               </tr>
             </thead>
             <tbody>
               {filtered.length === 0 ? (
-                <tr><td colSpan={6}><div className="emp-empty"><div className="emp-empty-icon">👥</div><div>No employees found</div></div></td></tr>
+                <tr><td colSpan={7}><div className="emp-empty"><div className="emp-empty-icon">👥</div><div>No employees found</div></div></td></tr>
               ) : filtered.map((emp) => (
                 <tr key={emp._id}>
                   <td>
@@ -392,10 +575,14 @@ export default function Employees() {
                   <td>
                     <div className="emp-att-wrap">
                       <button className="emp-att-btn" onClick={() => updateAttendance(emp, -1)}>−</button>
-                      <span className="emp-att-val">{emp.attendanceDays}</span>
+                      <span className="emp-att-val">{emp.monthData?.attendanceDays ?? emp.attendanceDays ?? 0}</span>
                       <button className="emp-att-btn" onClick={() => updateAttendance(emp, 1)}>+</button>
-                      <span className="emp-att-days">/ 30</span>
+                      <span className="emp-att-days">/ {workingDays}</span>
                     </div>
+                  </td>
+                  <td>
+                    <div className="emp-att-days">OT: {emp.monthData?.overtimeHours || 0}h</div>
+                    <div className="emp-att-days">+Rs.{(emp.monthData?.allowance || 0).toLocaleString()} / -Rs.{(emp.monthData?.deduction || 0).toLocaleString()}</div>
                   </td>
                   <td><span className="emp-net">Rs. {calcNet(emp).toLocaleString()}</span></td>
                   <td>
@@ -411,6 +598,8 @@ export default function Employees() {
         {editTarget && (
           <EditModal
             emp={editTarget}
+            month={selectedMonth}
+            workingDays={workingDays}
             token={token}
             showToast={showToast}
             onClose={() => setEditTarget(null)}

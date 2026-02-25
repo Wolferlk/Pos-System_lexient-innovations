@@ -391,15 +391,26 @@ export default function Login() {
     setLoading(true); setError("");
     try {
       const res = await axios.post("http://localhost:5000/api/auth/login", { email, password });
+      if (!res?.data?.token || !res?.data?.user?.role) {
+        throw new Error("Invalid login response");
+      }
       localStorage.setItem("token", res.data.token);
-      localStorage.setItem("role", res.data.user.role);
-      if (res.data.user.role === "admin") navigate("/admin");
+      const role = String(res.data.user.role || "").toLowerCase();
+      localStorage.setItem("role", role);
+      if (role === "admin") navigate("/admin");
       else navigate("/cashier");
     } catch (err) {
-      setError(err.response?.status === 401
-        ? "Invalid email or password. Please try again."
-        : "Unable to connect. Check your network and try again."
-      );
+      const status = err?.response?.status;
+      if (status === 400 || status === 401 || status === 404) {
+        setError("Invalid email or password. Please try again.");
+      } else if (status === 403) {
+        setError("Your account is disabled. Please contact admin.");
+      } else if (status === 503) {
+        setError(err?.response?.data?.message || "Cloud database unavailable.");
+      } else {
+        setError(err?.response?.data?.message || "Unable to connect. Check your network and try again.");
+      }
+    } finally {
       setLoading(false);
     }
   };

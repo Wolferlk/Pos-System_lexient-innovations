@@ -12,6 +12,7 @@ import Expenses from "./pages/Expenses";
 import Customers from "./pages/Customers";
 import User from "./pages/Users";
 import AuditLogs from "./pages/AuditLogs";
+import CashierAttendance from "./pages/CashierAttendance";
 
 function PrivateRoute({ children }) {
   const token = localStorage.getItem("token");
@@ -28,6 +29,14 @@ export default function App() {
         <Route path="/register" element={<Register />} />
 
         <Route path = "/cashier"element={ <PrivateRoute> <Cashier /> </PrivateRoute> } />
+        <Route
+          path="/cashier/attendance"
+          element={
+            <PrivateRoute>
+              <CashierAttendance />
+            </PrivateRoute>
+          }
+        />
         
 
 

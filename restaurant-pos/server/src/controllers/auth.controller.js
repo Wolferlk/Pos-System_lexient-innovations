@@ -1,11 +1,26 @@
 const User = require("../models/User");
 const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const mongoose = require("mongoose");
 const { logAction } = require("../utils/auditLogger");
+const {
+  DEFAULT_ADMIN_EMAIL,
+  DEFAULT_ADMIN_PASSWORD,
+  DEFAULT_ADMIN_NAME,
+} = require("../config/bootstrapAdmin");
+const JWT_SECRET = process.env.JWT_SECRET || "pos-local-fallback-secret";
+const normalizeRole = (role) => String(role || "cashier").toLowerCase();
 
 // Register (Admin only later)
 exports.register = async (req, res) => {
   try {
+    const mongoConnected = mongoose.connection.readyState === 1;
+    if (!mongoConnected) {
+      return res.status(503).json({
+        message: "Cloud database unavailable. Registration is available only when online.",
+      });
+    }
+
     const { name, email, password, role } = req.body;
 
     const hashedPassword = await bcrypt.hash(password, 10);
@@ -14,7 +29,7 @@ exports.register = async (req, res) => {
       name,
       email,
       password: hashedPassword,
-      role,
+      role: normalizeRole(role),
     });
 
     await logAction({
@@ -41,8 +56,49 @@ exports.register = async (req, res) => {
 exports.login = async (req, res) => {
   try {
     const { email, password } = req.body;
+    const mongoConnected = mongoose.connection.readyState === 1;
 
-    const user = await User.findOne({ email });
+    let user = null;
+    if (mongoConnected) {
+      user = await User.findOne({ email });
+    }
+
+    // Emergency local login path when cloud DB is unavailable.
+    if (!mongoConnected && email === DEFAULT_ADMIN_EMAIL && password === DEFAULT_ADMIN_PASSWORD) {
+      const token = jwt.sign(
+        { id: "offline-admin", role: "admin", name: DEFAULT_ADMIN_NAME },
+        JWT_SECRET,
+        { expiresIn: "1d" }
+      );
+
+      await logAction({
+        req,
+        action: "LOGIN",
+        task: "Login",
+        module: "Auth",
+        description: `Offline admin login (${DEFAULT_ADMIN_EMAIL})`,
+        payload: { offlineMode: true },
+        userOverride: { id: "offline-admin", name: DEFAULT_ADMIN_NAME, role: "admin" },
+      });
+
+      return res.json({
+        message: "Offline login successful",
+        token,
+        user: {
+          name: DEFAULT_ADMIN_NAME,
+          role: "admin",
+        },
+        offline: true,
+      });
+    }
+
+    if (!mongoConnected) {
+      return res.status(503).json({
+        message:
+          `Cloud database unavailable. Use emergency login: ${DEFAULT_ADMIN_EMAIL}`,
+      });
+    }
+
     if (!user) {
       await logAction({
         req,
@@ -54,6 +110,20 @@ exports.login = async (req, res) => {
         payload: { email },
       });
       return res.status(404).json({ message: "User not found" });
+    }
+
+    if (user.isActive === false) {
+      await logAction({
+        req,
+        action: "LOGIN",
+        task: "Login",
+        module: "Auth",
+        status: "FAILED",
+        description: `Login blocked for ${email}: account disabled`,
+        entityType: "User",
+        entityId: user._id,
+      });
+      return res.status(403).json({ message: "User account is disabled" });
     }
 
     const isMatch = await bcrypt.compare(password, user.password);
@@ -72,8 +142,8 @@ exports.login = async (req, res) => {
     }
 
     const token = jwt.sign(
-      { id: user._id, role: user.role, name: user.name },
-      process.env.JWT_SECRET,
+      { id: user._id, role: normalizeRole(user.role), name: user.name },
+      JWT_SECRET,
       { expiresIn: "1d" }
     );
 
@@ -93,7 +163,7 @@ exports.login = async (req, res) => {
       token,
       user: {
         name: user.name,
-        role: user.role,
+        role: normalizeRole(user.role),
       },
     });
   } catch (error) {

@@ -228,10 +228,12 @@ const NAV = {
     { label: "Audit Logs",    icon: "🛡️", path: "/admin/audit-logs" },
     { label: "User Manage", icon: "⚡", path: "/admin/users" },
     { label: "Register User", icon: "📝", path: "/admin/register-user" },
+    { label: "Attendance", icon: "🗓️", path: "/cashier/attendance" },
     { label: "Cashier Panel", icon: "⚡", path: "/cashier" },
   ],
   cashier: [
     { label: "Cashier Panel", icon: "⚡", path: "/cashier" },
+    { label: "Attendance", icon: "🗓️", path: "/cashier/attendance" },
   ],
 };
 

@@ -1,4 +1,5 @@
 const jwt = require("jsonwebtoken");
+const JWT_SECRET = process.env.JWT_SECRET || "pos-local-fallback-secret";
 
 exports.verifyToken = (req, res, next) => {
   const authHeader = req.headers.authorization;
@@ -9,7 +10,7 @@ exports.verifyToken = (req, res, next) => {
   const token = authHeader.split(" ")[1];
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    const decoded = jwt.verify(token, JWT_SECRET);
     req.user = decoded; // contains id + role
     next();
   } catch (error) {
@@ -19,8 +20,10 @@ exports.verifyToken = (req, res, next) => {
 
 // Role check middleware
 exports.authorizeRoles = (...roles) => {
+  const normalized = roles.map((r) => String(r).toLowerCase());
   return (req, res, next) => {
-    if (!roles.includes(req.user.role)) {
+    const role = String(req.user?.role || "").toLowerCase();
+    if (!normalized.includes(role)) {
       return res.status(403).json({ message: "Access denied" });
     }
     next();
