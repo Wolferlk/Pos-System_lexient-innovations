@@ -7,6 +7,18 @@ const fs = require("fs");
 let mainWindow;
 let backendProcess;
 const isDev = !app.isPackaged;
+let backendLogs = "";
+let rendererLogs = "";
+let logFilePath = "";
+
+const appendLog = (line) => {
+  try {
+    const text = `[${new Date().toISOString()}] ${line}\n`;
+    if (logFilePath) fs.appendFileSync(logFilePath, text, "utf-8");
+  } catch (_) {
+    // Ignore log file failures.
+  }
+};
 
 const loadingHtml = (msg = "Starting POS...") => `<!doctype html>
 <html>
@@ -89,17 +101,36 @@ const waitForPort = (port, host = "127.0.0.1", timeoutMs = 15000) =>
   });
 
 function startBackend() {
-  const backendEntry = isDev
-    ? path.join(__dirname, "server", "server.js")
-    : path.join(process.resourcesPath, "server", "server.js");
+  const serverDir = isDev
+    ? path.join(__dirname, "server")
+    : path.join(process.resourcesPath, "server");
+  const backendEntry = path.join(serverDir, "server.js");
 
   backendProcess = spawn(process.execPath, [backendEntry], {
     env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
-    stdio: "inherit",
+    cwd: serverDir,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+
+  backendProcess.stdout.on("data", (chunk) => {
+    const msg = chunk.toString();
+    backendLogs += msg;
+    if (backendLogs.length > 8000) backendLogs = backendLogs.slice(-8000);
+    console.log(msg.trim());
+    appendLog(`[BACKEND][OUT] ${msg.trim()}`);
+  });
+
+  backendProcess.stderr.on("data", (chunk) => {
+    const msg = chunk.toString();
+    backendLogs += msg;
+    if (backendLogs.length > 8000) backendLogs = backendLogs.slice(-8000);
+    console.error(msg.trim());
+    appendLog(`[BACKEND][ERR] ${msg.trim()}`);
   });
 
   backendProcess.on("exit", (code) => {
     console.log(`Backend process exited with code ${code}`);
+    appendLog(`[BACKEND] exit code ${code}`);
   });
 }
 
@@ -111,6 +142,13 @@ function createWindow() {
   });
 
   mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml())}`);
+
+  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
+    const msg = `[RENDERER][L${level}] ${message} (${sourceId}:${line})`;
+    rendererLogs += `${msg}\n`;
+    if (rendererLogs.length > 8000) rendererLogs = rendererLogs.slice(-8000);
+    appendLog(msg);
+  });
 
   mainWindow.webContents.on("did-fail-load", (_event, code, desc, url) => {
     mainWindow.loadURL(
@@ -148,6 +186,37 @@ async function loadRendererApp() {
     }
 
     await mainWindow.loadFile(indexPath);
+
+    // Detect blank renderer (React not mounted / JS fatal) and show explicit diagnostics.
+    setTimeout(async () => {
+      if (!mainWindow || mainWindow.isDestroyed()) return;
+      try {
+        const probe = await mainWindow.webContents.executeJavaScript(`
+          (() => {
+            const root = document.getElementById("root");
+            return {
+              href: location.href,
+              hasRoot: !!root,
+              childCount: root ? root.childElementCount : -1,
+              bodyText: (document.body?.innerText || "").trim().slice(0, 400)
+            };
+          })();
+        `);
+
+        if (probe && probe.hasRoot && probe.childCount === 0) {
+          await mainWindow.loadURL(
+            `data:text/html;charset=utf-8,${encodeURIComponent(
+              errorHtml(
+                "Renderer Loaded But UI Not Mounted",
+                `Detected blank UI after startup.\n\nURL: ${probe.href}\nRoot child count: ${probe.childCount}\nBody text: ${probe.bodyText || "(empty)"}\n\nRenderer log tail:\n${rendererLogs || "(no renderer logs)"}\n\nBackend log tail:\n${backendLogs || "(no backend logs)"}\n\nStartup log file:\n${logFilePath || "(not set)"}`
+              )
+            )}`
+          );
+        }
+      } catch (probeError) {
+        appendLog(`[MAIN] renderer probe failed: ${probeError?.message || probeError}`);
+      }
+    }, 6000);
   } catch (error) {
     await mainWindow.loadURL(
       `data:text/html;charset=utf-8,${encodeURIComponent(
@@ -158,6 +227,10 @@ async function loadRendererApp() {
 }
 
 app.whenReady().then(async () => {
+  logFilePath = path.join(app.getPath("userData"), "startup.log");
+  appendLog(`[MAIN] app start. isPackaged=${isDev ? "false" : "true"}`);
+  appendLog(`[MAIN] userData=${app.getPath("userData")}`);
+
   startBackend();
   createWindow();
   try {
@@ -166,7 +239,10 @@ app.whenReady().then(async () => {
     if (mainWindow) {
       await mainWindow.loadURL(
         `data:text/html;charset=utf-8,${encodeURIComponent(
-          errorHtml("Backend Startup Timeout", `${e.message}\n\nExpected API: http://localhost:5000`)
+          errorHtml(
+            "Backend Startup Timeout",
+            `${e.message}\n\nExpected API: http://localhost:5000\n\nBackend log tail:\n${backendLogs || "(no logs captured)"}\n\nStartup log file:\n${logFilePath || "(not set)"}`
+          )
         )}`
       );
     }
@@ -190,4 +266,19 @@ app.on("before-quit", () => {
   if (backendProcess && !backendProcess.killed) {
     backendProcess.kill();
   }
+});
+
+process.on("uncaughtException", (err) => {
+  appendLog(`[MAIN][UNCAUGHT] ${err?.stack || err}`);
+  if (mainWindow && !mainWindow.isDestroyed()) {
+    mainWindow.loadURL(
+      `data:text/html;charset=utf-8,${encodeURIComponent(
+        errorHtml("Main Process Uncaught Exception", `${err?.stack || err}\n\nStartup log file:\n${logFilePath || "(not set)"}`)
+      )}`
+    );
+  }
+});
+
+process.on("unhandledRejection", (reason) => {
+  appendLog(`[MAIN][REJECTION] ${reason?.stack || reason}`);
 });
