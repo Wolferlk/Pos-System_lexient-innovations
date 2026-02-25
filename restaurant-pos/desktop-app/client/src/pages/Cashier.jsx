@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback, useRef } from "react";
 import axios from "axios";
 import ThermalReceipt from "./ThermalReceipt";
 import MainLayout from "../layout/MainLayout";
+import ReactDOM from "react-dom/client";
+
 
 // ─── Styles ───────────────────────────────────────────────────────────────────
 const buildStyles = (theme, fontScale) => `
@@ -299,20 +301,81 @@ function Clock({ fs }) {
 
 // ─── Print Receipt ────────────────────────────────────────────────────────────
 function printOrderReceipt(order) {
-  const win = window.open("","_blank","width=400,height=600");
-  const items = (order.items||[]).map(i=>`<div class="row"><span>${i.name}${i.portion?" ("+i.portion+")":""} × ${i.quantity}</span><span>Rs. ${i.total??(i.price*i.quantity)}</span></div>`).join("");
-  win.document.write(`<html><head><title>Receipt #${order.invoiceNumber||""}</title>
-  <style>body{font-family:monospace;font-size:13px;color:#000;padding:20px;max-width:320px;margin:0 auto}h2{text-align:center;font-size:16px;margin-bottom:2px}.inv{text-align:center;font-size:11px;margin-bottom:4px;color:#555}.date{text-align:center;font-size:11px;margin-bottom:10px;color:#777}.divider{border-top:1px dashed #000;margin:8px 0}.row{display:flex;justify-content:space-between;margin-bottom:3px}.total{font-weight:bold;font-size:15px;margin-top:4px}.pay{text-align:center;margin-top:8px;font-size:11px;color:#555}.footer{text-align:center;margin-top:14px;font-size:10px;color:#999}</style></head><body>
-  <h2>🧾 QuickPOS</h2><div class="inv">#${order.invoiceNumber||"N/A"}</div>
-  <div class="date">${new Date(order.createdAt||Date.now()).toLocaleString()}</div>
-  <div class="divider"></div>${items}<div class="divider"></div>
-  ${order.discountAmount>0?`<div class="row"><span>Subtotal</span><span>Rs. ${order.subtotal}</span></div><div class="row"><span>Discount</span><span>- Rs. ${order.discountAmount}</span></div>`:""}
-  <div class="row total"><span>TOTAL</span><span>Rs. ${order.grandTotal}</span></div>
-  <div class="pay">Payment: ${order.paymentMethod||"Cash"}</div>
-  ${order.customerPhone?`<div class="pay">Customer: ${order.customerPhone}</div>`:""}
-  <div class="footer">Thank you for your visit! ❤️</div></body></html>`);
-  win.document.close(); win.focus();
-  setTimeout(()=>{ win.print(); win.close(); }, 400);
+  const printWindow = window.open("", "", "width=400,height=600");
+
+  // Get existing styles from current document
+  const styles = Array.from(document.styleSheets)
+    .map(styleSheet => {
+      try {
+        return Array.from(styleSheet.cssRules)
+          .map(rule => rule.cssText)
+          .join("");
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+
+  printWindow.document.write(`
+    <html>
+      <head>
+        <title>Receipt</title>
+        <style>
+          ${styles}
+
+          @page {
+            size: 80mm auto;
+            margin: 0;
+          }
+
+          body {
+            margin: 0;
+            padding: 0;
+            background: white;
+            display: flex;
+            justify-content: center;
+          }
+
+          #print-root {
+            width: 80mm;
+          }
+        </style>
+      </head>
+      <body>
+        <div id="print-root"></div>
+      </body>
+    </html>
+  `);
+
+  printWindow.document.close();
+
+  const root = ReactDOM.createRoot(
+    printWindow.document.getElementById("print-root")
+  );
+
+  root.render(
+    <ThermalReceipt
+      order={{
+        ...order,
+        subTotal: order.subtotal ?? order.subTotal,
+        totalDiscount: order.discountAmount ?? order.totalDiscount
+      }}
+      customer={
+        order.customerPhone
+          ? { name: order.customerPhone }
+          : null
+      }
+    />
+  );
+
+  // Wait for images + render
+  printWindow.onload = () => {
+    setTimeout(() => {
+      printWindow.focus();
+      printWindow.print();
+      printWindow.close();
+    }, 500);
+  };
 }
 
 // ─── Portion Selector Modal ───────────────────────────────────────────────────
