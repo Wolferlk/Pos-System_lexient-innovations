@@ -1,0 +1,11 @@
+
+
+setup creating 
+
+npm install
+npm install --prefix server
+npm install --prefix desktop-app/client
+npm run dist
+
+
+

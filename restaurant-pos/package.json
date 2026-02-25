@@ -1,12 +1,12 @@
 {
   "name": "captain-cafe-pos",
   "version": "1.0.0",
-  "main": "electron/main.js",
+  "main": "main.js",
   "scripts": {
     "dev": "concurrently \"npm run dev --prefix desktop-app/client\" \"npm run dev --prefix server\" \"wait-on http://localhost:5173 && electron .\"",
     "build:client": "npm run build --prefix desktop-app/client",
     "build": "npm run build:client",
-    "dist": "npm run build && electron-builder --win nsis"
+    "dist": "npm run build && set CSC_IDENTITY_AUTO_DISCOVERY=false&& set WIN_CSC_LINK=&& set CSC_LINK=&& electron-builder --win nsis"
   },
   "build": {
     "appId": "com.captaincafe.pos",
@@ -30,11 +30,13 @@
       }
     ],
     "files": [
+      "main.js",
       "electron/**/*",
       "package.json"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "signAndEditExecutable": false
     },
     "directories": {
       "buildResources": "assets",
@@ -45,7 +47,8 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
-    }
+    },
+    "forceCodeSigning": false
   },
   "devDependencies": {
     "concurrently": "^8.2.0",
