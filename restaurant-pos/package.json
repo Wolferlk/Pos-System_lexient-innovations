@@ -1,5 +1,5 @@
 {
-  "name": "captain-cafe-pos",
+  "name": "Captain'S_Cafe_POS",
   "version": "1.0.0",
   "main": "main.js",
   "scripts": {
@@ -22,6 +22,10 @@
         ]
       },
       {
+        "from": ".env",
+        "to": "server/.env"
+      },
+      {
         "from": "desktop-app/client/dist",
         "to": "client-dist",
         "filter": [
@@ -36,7 +40,8 @@
     ],
     "win": {
       "target": "nsis",
-      "signAndEditExecutable": false
+      "signAndEditExecutable": false,
+      "icon": "assets/captainlogo.ico"
     },
     "directories": {
       "buildResources": "assets",
@@ -55,5 +60,8 @@
     "electron": "^27.0.0",
     "electron-builder": "^24.6.0",
     "wait-on": "^7.0.1"
+  },
+  "dependencies": {
+    "kill-port": "^2.0.1"
   }
 }

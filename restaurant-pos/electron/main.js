@@ -1,95 +1,128 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, dialog } = require("electron");
 const path = require("path");
-const { spawn } = require("child_process");
-const net = require("net");
+const { fork } = require("child_process");
+const axios = require("axios");
+const kill = require("kill-port");
 
-let mainWindow;
 let backendProcess;
-const isDev = !app.isPackaged;
+let mainWindow;
 
-const waitForPort = (port, host = "127.0.0.1", timeoutMs = 15000) =>
-  new Promise((resolve, reject) => {
-    const started = Date.now();
-    const check = () => {
-      const socket = new net.Socket();
-      socket.setTimeout(1000);
-      socket.once("connect", () => {
-        socket.destroy();
-        resolve();
-      });
-      socket.once("error", () => {
-        socket.destroy();
-        if (Date.now() - started >= timeoutMs) {
-          reject(new Error(`Timeout waiting for ${host}:${port}`));
-        } else {
-          setTimeout(check, 250);
-        }
-      });
-      socket.once("timeout", () => {
-        socket.destroy();
-        if (Date.now() - started >= timeoutMs) {
-          reject(new Error(`Timeout waiting for ${host}:${port}`));
-        } else {
-          setTimeout(check, 250);
-        }
-      });
-      socket.connect(port, host);
-    };
-    check();
-  });
+const isDev = process.env.NODE_ENV !== "production";
 
+const serverPath = isDev
+  ? path.join(__dirname, "..", "backend", "server.js")
+  : path.join(process.resourcesPath, "backend", "server.js");
+
+const BACKEND_URL = "http://127.0.0.1:5000";
+const MAX_RETRIES = 40; // 40 seconds max wait
+
+// ----------------------------------------------------
+// Start Backend Process
+// ----------------------------------------------------
 function startBackend() {
-  const backendEntry = isDev
-    ? path.join(__dirname, "..", "server", "server.js")
-    : path.join(process.resourcesPath, "server", "server.js");
+  console.log(`🚀 Starting backend at: ${serverPath}`);
 
-  // Use Electron binary as Node runtime so client PC does not need Node installed.
-  backendProcess = spawn(process.execPath, [backendEntry], {
-    env: { ...process.env, ELECTRON_RUN_AS_NODE: "1" },
+  backendProcess = fork(serverPath, [], {
     stdio: "inherit",
   });
 
-  backendProcess.on("exit", (code) => {
-    console.log(`Backend process exited with code ${code}`);
+  backendProcess.on("error", (err) => {
+    console.error("❌ Backend process error:", err);
+  });
+
+  backendProcess.on("exit", (code, signal) => {
+    console.log(`⚠ Backend exited (code: ${code}, signal: ${signal})`);
   });
 }
 
+// ----------------------------------------------------
+// Wait Until Backend Is Ready
+// ----------------------------------------------------
+async function waitForBackend() {
+  console.log("⏳ Waiting for backend...");
+
+  for (let i = 0; i < MAX_RETRIES; i++) {
+    try {
+      await axios.get(`${BACKEND_URL}/health`);
+      console.log("✅ Backend is ready");
+      return;
+    } catch (err) {
+      await new Promise((res) => setTimeout(res, 1000));
+    }
+  }
+
+  throw new Error("Backend failed to start within timeout.");
+}
+
+// ----------------------------------------------------
+// Create Main Window
+// ----------------------------------------------------
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    autoHideMenuBar: true,
+    show: false,
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
   });
 
-  if (isDev) {
-    mainWindow.loadURL("http://localhost:5173");
-  } else {
-    const indexPath = path.join(process.resourcesPath, "client-dist", "index.html");
-    mainWindow.loadFile(indexPath);
-  }
+  const startUrl = isDev
+    ? "http://localhost:3000"
+    : `file://${path.join(__dirname, "../build/index.html")}`;
+
+  mainWindow.loadURL(startUrl);
+
+  mainWindow.once("ready-to-show", () => {
+    mainWindow.show();
+  });
 }
 
+// ----------------------------------------------------
+// App Ready (CORRECT PLACE)
+// ----------------------------------------------------
 app.whenReady().then(async () => {
-  startBackend();
   try {
-    await waitForPort(5000);
-  } catch (e) {
-    console.warn(`Backend startup check warning: ${e.message}`);
+    console.log("🔍 Checking port 5000...");
+
+    // Kill port if already running
+    try {
+      await kill(5000);
+      console.log("⚠ Old backend process killed");
+    } catch {
+      console.log("✅ Port 5000 is free");
+    }
+
+    startBackend();
+    await waitForBackend();
+    createWindow();
+
+  } catch (error) {
+    console.error("❌ Startup failed:", error);
+
+    dialog.showErrorBox(
+      "Startup Error",
+      "POS system failed to start properly.\n\nPlease restart the application."
+    );
+
+    app.quit();
   }
-  createWindow();
-
-  app.on("activate", function () {
-    if (BrowserWindow.getAllWindows().length === 0)
-      createWindow();
-  });
 });
 
-app.on("window-all-closed", function () {
-  if (process.platform !== "darwin") app.quit();
-});
-
+// ----------------------------------------------------
+// Graceful Shutdown
+// ----------------------------------------------------
 app.on("before-quit", () => {
-  if (backendProcess && !backendProcess.killed) {
+  console.log("🛑 Closing backend...");
+
+  if (backendProcess) {
     backendProcess.kill();
+  }
+});
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
   }
 });

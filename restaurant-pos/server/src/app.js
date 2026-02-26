@@ -33,4 +33,8 @@ app.get("/", (req, res) => {
   res.send("Restaurant POS API Running...");
 });
 
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", timestamp: new Date().toISOString() });
+});
+
 module.exports = app;

@@ -163,6 +163,7 @@ exports.login = async (req, res) => {
       token,
       user: {
         name: user.name,
+        email: user.email,
         role: normalizeRole(user.role),
       },
     });
@@ -184,6 +185,39 @@ exports.logout = async (req, res) => {
     });
 
     res.json({ message: "Logout logged" });
+  } catch (error) {
+    res.status(500).json({ message: error.message });
+  }
+};
+
+// Get current user
+exports.getMe = async (req, res) => {
+  try {
+    const mongoConnected = mongoose.connection.readyState === 1;
+    
+    // For offline admin login
+    if (req.user?.id === "offline-admin") {
+      return res.json({
+        name: req.user.name || "Admin",
+        email: DEFAULT_ADMIN_EMAIL,
+        role: req.user.role || "admin",
+      });
+    }
+
+    if (!mongoConnected) {
+      return res.status(503).json({ message: "Cloud database unavailable" });
+    }
+
+    const user = await User.findById(req.user.id).select("-password");
+    if (!user) {
+      return res.status(404).json({ message: "User not found" });
+    }
+
+    res.json({
+      name: user.name,
+      email: user.email,
+      role: normalizeRole(user.role),
+    });
   } catch (error) {
     res.status(500).json({ message: error.message });
   }

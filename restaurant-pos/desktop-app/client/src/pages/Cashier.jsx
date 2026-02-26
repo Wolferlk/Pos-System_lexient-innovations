@@ -951,7 +951,7 @@ export default function Cashier() {
             <div className="pos-header">
               <div className="pos-logo">
                 <div className="pos-logo-dot" />
-                <div className="pos-logo-text">Quick<span>POS</span></div>
+                <div className="pos-logo-text">Quick<span>POS</span> By Lexient Innovations</div>
               </div>
               <div className="pos-header-actions">
                 <button className="pos-orders-btn" onClick={()=>setShowOrdersModal(true)}>

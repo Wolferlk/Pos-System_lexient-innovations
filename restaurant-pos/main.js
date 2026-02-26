@@ -3,6 +3,7 @@ const path = require("path");
 const { spawn } = require("child_process");
 const net = require("net");
 const fs = require("fs");
+const killPort = require("kill-port");
 
 let mainWindow;
 let backendProcess;
@@ -10,6 +11,10 @@ const isDev = !app.isPackaged;
 let backendLogs = "";
 let rendererLogs = "";
 let logFilePath = "";
+
+// Some Windows devices show a black/blank Electron window with GPU rendering.
+// Disabling hardware acceleration makes rendering deterministic for POS installs.
+app.disableHardwareAcceleration();
 
 const appendLog = (line) => {
   try {
@@ -39,7 +44,7 @@ const loadingHtml = (msg = "Starting POS...") => `<!doctype html>
 </head>
 <body>
   <div class="card">
-    <div class="title">CaptainCafePOS</div>
+    <div class="title">Captain's Cafe POS By Lexient Innovations</div>
     <div class="sub">Please wait while the app initializes</div>
     <div class="row"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
     <div class="msg">${msg}</div>
@@ -69,7 +74,7 @@ const errorHtml = (title, details) => `<!doctype html>
 </body>
 </html>`;
 
-const waitForPort = (port, host = "127.0.0.1", timeoutMs = 15000) =>
+const waitForPort = (port, host = "127.0.0.1", timeoutMs = 30000) =>
   new Promise((resolve, reject) => {
     const started = Date.now();
     const check = () => {
@@ -134,26 +139,45 @@ function startBackend() {
   });
 }
 
+function stopBackend() {
+  if (backendProcess && !backendProcess.killed) {
+    backendProcess.kill();
+  }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    backgroundColor: "#0f1117",
     autoHideMenuBar: true,
+    icon: path.join(__dirname, "assets", "captainlogo.ico"), // ✅ FIXED
   });
 
-  mainWindow.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(loadingHtml())}`);
+  mainWindow.loadURL(
+    `data:text/html;charset=utf-8,${encodeURIComponent(
+      loadingHtml()
+    )}`
+  );
 
-  mainWindow.webContents.on("console-message", (_event, level, message, line, sourceId) => {
-    const msg = `[RENDERER][L${level}] ${message} (${sourceId}:${line})`;
-    rendererLogs += `${msg}\n`;
-    if (rendererLogs.length > 8000) rendererLogs = rendererLogs.slice(-8000);
-    appendLog(msg);
-  });
+  mainWindow.webContents.on(
+    "console-message",
+    (_event, level, message, line, sourceId) => {
+      const msg = `[RENDERER][L${level}] ${message} (${sourceId}:${line})`;
+      rendererLogs += `${msg}\n`;
+      if (rendererLogs.length > 8000)
+        rendererLogs = rendererLogs.slice(-8000);
+      appendLog(msg);
+    }
+  );
 
   mainWindow.webContents.on("did-fail-load", (_event, code, desc, url) => {
     mainWindow.loadURL(
       `data:text/html;charset=utf-8,${encodeURIComponent(
-        errorHtml("Renderer Failed to Load", `Error code: ${code}\nDescription: ${desc}\nURL: ${url}`)
+        errorHtml(
+          "Renderer Failed to Load",
+          `Error code: ${code}\nDescription: ${desc}\nURL: ${url}`
+        )
       )}`
     );
   });
@@ -161,7 +185,10 @@ function createWindow() {
   mainWindow.webContents.on("render-process-gone", (_event, details) => {
     mainWindow.loadURL(
       `data:text/html;charset=utf-8,${encodeURIComponent(
-        errorHtml("Renderer Process Crashed", JSON.stringify(details, null, 2))
+        errorHtml(
+          "Renderer Process Crashed",
+          JSON.stringify(details, null, 2)
+        )
       )}`
     );
   });
@@ -231,22 +258,41 @@ app.whenReady().then(async () => {
   appendLog(`[MAIN] app start. isPackaged=${isDev ? "false" : "true"}`);
   appendLog(`[MAIN] userData=${app.getPath("userData")}`);
 
+  try {
+    await killPort(5000);
+    appendLog("[MAIN] cleared stale process on port 5000");
+  } catch (_) {
+    appendLog("[MAIN] port 5000 already free");
+  }
+
   startBackend();
   createWindow();
   try {
     await waitForPort(5000);
   } catch (e) {
-    if (mainWindow) {
-      await mainWindow.loadURL(
-        `data:text/html;charset=utf-8,${encodeURIComponent(
-          errorHtml(
-            "Backend Startup Timeout",
-            `${e.message}\n\nExpected API: http://localhost:5000\n\nBackend log tail:\n${backendLogs || "(no logs captured)"}\n\nStartup log file:\n${logFilePath || "(not set)"}`
-          )
-        )}`
-      );
+    appendLog("[MAIN] backend timeout; retrying backend start once");
+    stopBackend();
+    try {
+      await killPort(5000);
+    } catch (_) {
+      // ignore
     }
-    return;
+    startBackend();
+    try {
+      await waitForPort(5000, "127.0.0.1", 30000);
+    } catch (retryError) {
+      if (mainWindow) {
+        await mainWindow.loadURL(
+          `data:text/html;charset=utf-8,${encodeURIComponent(
+            errorHtml(
+              "Backend Startup Timeout",
+              `${retryError.message}\n\nExpected API: http://localhost:5000\n\nBackend log tail:\n${backendLogs || "(no logs captured)"}\n\nStartup log file:\n${logFilePath || "(not set)"}`
+            )
+          )}`
+        );
+      }
+      return;
+    }
   }
   await loadRendererApp();
 
@@ -263,9 +309,7 @@ app.on("window-all-closed", function () {
 });
 
 app.on("before-quit", () => {
-  if (backendProcess && !backendProcess.killed) {
-    backendProcess.kill();
-  }
+  stopBackend();
 });
 
 process.on("uncaughtException", (err) => {
